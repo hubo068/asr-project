@@ -1,6 +1,6 @@
 # 语音转 Markdown 文稿 (Whisper)
 
-基于 OpenAI Whisper 的语音转录工具，支持中英文自动识别、智能分段、标点补全，以及可选的 LLM 后处理纠错。
+基于 OpenAI Whisper 的语音转录工具，支持中英文自动识别、智能分段、标点补全，可选的 LLM 后处理纠错，以及英文音频翻译为中文。
 
 **核心设计**：语音识别 和 LLM 优化分为两步执行，识别过的文件可以直接优化，不用重新识别。
 
@@ -86,6 +86,26 @@ python transcribe.py your_audio.m4a --only-refine
 
 优化后的文件保存为：`your_audio_refined.md`
 
+### 翻译为中文（英文音频）
+
+对于英文音频，可以使用 LLM 将转录结果翻译成中文：
+
+```bash
+# 方式1：--translate-to-zh 检测到 .md 已存在，自动跳过识别
+python transcribe.py your_audio.m4a --translate-to-zh
+
+# 方式2：已有英文文稿，直接翻译
+python transcribe.py your_audio.m4a --only-refine --translate-to-zh
+```
+
+翻译后的文件保存为：`your_audio_zh.md`
+
+也可以先校对英文，再翻译中文：
+
+```bash
+python transcribe.py your_audio.m4a --refine --translate-to-zh
+```
+
 ### 切换 LLM Provider（多 Provider 配置时）
 
 ```bash
@@ -104,7 +124,7 @@ python transcribe.py meeting.m4a --only-refine --llm-provider openai
 python transcribe.py your_audio.m4a --refine
 ```
 
-### 完整示例
+### 完整示例（中文音频）
 
 ```bash
 # 1. 识别
@@ -118,7 +138,24 @@ python transcribe.py meeting.m4a --only-refine
 # -> 生成 meeting_refined.md
 ```
 
+### 完整示例（英文音频翻译）
+
+```bash
+# 1. 识别英文音频
+python transcribe.py podcast.mp3
+# -> 生成 podcast.md（英文原文）
+
+# 2. 翻译成中文
+python transcribe.py podcast.mp3 --translate-to-zh
+# -> 生成 podcast_zh.md（中文翻译）
+
+# 或一步完成：识别 + 翻译
+python transcribe.py podcast.mp3 --translate-to-zh
+```
+
 ## 分步工作流示意
+
+### 中文音频
 
 ```
 音频文件
@@ -126,6 +163,19 @@ python transcribe.py meeting.m4a --only-refine
 [步骤 1] Whisper 识别  ->  your_audio.md
     |  （人工检查，或发现错误）
 [步骤 2] LLM 优化      ->  your_audio_refined.md
+```
+
+### 英文音频（翻译）
+
+```
+音频文件
+    |
+[步骤 1] Whisper 识别  ->  your_audio.md（英文原文）
+    |
+[步骤 2] LLM 翻译      ->  your_audio_zh.md（中文翻译）
+    |  （可选：先校对再翻译）
+[可选] LLM 优化        ->  your_audio_refined.md（英文校对稿）
+                         ->  your_audio_zh.md（中文翻译）
 ```
 
 ## 模型说明
@@ -170,6 +220,22 @@ python transcribe.py meeting.m4a --only-refine
 `00:00:05` 大家好，今天我们讨论一下下个季度的产品规划。
 
 `00:00:22` 首先由设计团队介绍一下最新的交互方案，这个方案在用户测试中的反馈非常好。
+```
+
+`your_audio_zh.md`（LLM 翻译后，英文音频）：
+
+```markdown
+# 语音转录文稿
+
+- **源文件**: `podcast.mp3`
+- **识别语言**: en
+- **总时长**: 00:32:15
+
+---
+
+`00:00:05` 大家好，欢迎来到本期播客。今天我们来讨论人工智能领域的最新进展。
+
+`00:00:22` 首先，让我们看看大语言模型在过去几个月中的发展，以及它们如何改变我们的工作方式。
 ```
 
 ## 声音克隆（实验功能）

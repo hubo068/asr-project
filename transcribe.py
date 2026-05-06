@@ -141,39 +141,47 @@ def smart_paragraphs(segments, pause_threshold=1.5, max_chars=180):
     return paragraphs
 
 
-def refine_text_with_llm(md_content, provider=None, api_key=None, base_url=None, model=None):
+def split_md_into_chunks(md_content, max_chunk_size=6000):
     """
-    使用 LLM 对转录文本进行后处理，修正同音字、人名、专有名词等错误。
+    将 Markdown 内容按段落拆分为多个块，每块不超过 max_chunk_size 字符。
+    尽量在段落边界处切割，保持时间戳行的完整性。
     """
-    if provider is None:
-        raise RuntimeError("未指定 LLM provider，请在 config.json 中设置 type 或 llm_provider。")
+    lines = md_content.splitlines()
+    chunks = []
+    current_chunk_lines = []
+    current_size = 0
 
-    if not api_key:
-        raise RuntimeError(f"未找到 API Key。请在 config.json 中设置 api_key。")
+    for line in lines:
+        line_len = len(line) + 1  # +1 for newline
 
-    print(f"  LLM Provider: {provider}")
-    if base_url:
-        print(f"  Base URL: {base_url}")
-    if model:
-        print(f"  Model: {model}")
+        # 如果单行就超过限制，单独成块
+        if line_len > max_chunk_size:
+            if current_chunk_lines:
+                chunks.append("\n".join(current_chunk_lines))
+                current_chunk_lines = []
+                current_size = 0
+            chunks.append(line)
+            continue
 
-    system_prompt = (
-        "你是一位专业的文字校对编辑，擅长语音识别文本的纠错。"
-        "你的任务是对转录文本进行审校，严格遵循以下规则：\n"
-        "1. 修正同音字错误（如：在/再、做/作、的/得/地、他/她/它等）；\n"
-        "2. 修正人名、地名、公司名、品牌名、专业术语、技术名词等专有名词；\n"
-        "3. 修正明显的语法和标点错误，但不要过度修改；\n"
-        "4. 保持原文的口语风格、语气和表达方式，不要润色或重写；\n"
-        "5. 绝对不要添加原文中没有的信息；\n"
-        "6. 保留所有 Markdown 格式和时间戳（如 `00:01:23`）。"
-    )
+        # 如果加入当前行会超限，先封存当前块
+        if current_size + line_len > max_chunk_size and current_chunk_lines:
+            chunks.append("\n".join(current_chunk_lines))
+            current_chunk_lines = []
+            current_size = 0
 
-    user_prompt = (
-        "请对以下语音识别转录文本进行校对纠错。"
-        "直接返回修正后的完整 Markdown 文本，不要添加任何解释或总结。\n\n"
-        f"{md_content}"
-    )
+        current_chunk_lines.append(line)
+        current_size += line_len
 
+    if current_chunk_lines:
+        chunks.append("\n".join(current_chunk_lines))
+
+    return chunks
+
+
+def call_llm_single_chunk(system_prompt, user_prompt, provider, api_key, base_url=None, model=None, max_tokens=8192, timeout=300):
+    """
+    对单块文本调用 LLM，返回修正后的文本。
+    """
     if provider == "anthropic":
         try:
             import anthropic
@@ -183,9 +191,10 @@ def refine_text_with_llm(md_content, provider=None, api_key=None, base_url=None,
         client = anthropic.Anthropic(api_key=api_key)
         response = client.messages.create(
             model=model or "claude-sonnet-4-6",
-            max_tokens=8192,
+            max_tokens=max_tokens,
             system=system_prompt,
             messages=[{"role": "user", "content": user_prompt}],
+            timeout=timeout,
         )
         return response.content[0].text
 
@@ -203,6 +212,7 @@ def refine_text_with_llm(md_content, provider=None, api_key=None, base_url=None,
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_prompt},
             ],
+            timeout=timeout,
         )
         return response.choices[0].message.content
 
@@ -212,43 +222,144 @@ def refine_text_with_llm(md_content, provider=None, api_key=None, base_url=None,
         except ImportError:
             raise RuntimeError("KIMI 当前使用 Anthropic SDK 调用，请先安装: pip install anthropic")
 
-        try:
-            client = anthropic.Anthropic(
-                api_key=api_key,
-                base_url=base_url or "https://api.kimi.com/coding/",
-            )
-            # KIMI 的 Anthropic 兼容接口对 system 参数敏感，合并到 user prompt 中
-            full_prompt = (
-                "【系统指令】\n" + system_prompt + "\n\n" +
-                "【用户请求】\n" + user_prompt
-            )
-            response = client.messages.create(
-                model=model or "kimi-latest",
-                max_tokens=8192,
-                messages=[{"role": "user", "content": full_prompt}],
-            )
-            return response.content[0].text
-        except anthropic.AuthenticationError as e:
-            raise RuntimeError(
-                "KIMI API 认证失败 (401)。可能原因:\n"
-                "1. API Key 无效或已过期\n"
-                "2. Key 复制时混入了空格或换行，请检查 config.json\n"
-                "3. base_url 配置错误\n"
-                f"原始错误: {e}"
-            ) from e
-        except anthropic.BadRequestError as e:
-            if "high risk" in str(e).lower():
-                raise RuntimeError(
-                    "KIMI 安全策略拦截 (400 high risk)。可能原因:\n"
-                    "1. 转录文本中包含敏感内容\n"
-                    "2. 请求被风控系统误判\n"
-                    "建议: 检查转录文本内容，或尝试更换模型\n"
-                    f"原始错误: {e}"
-                ) from e
-            raise
+        client = anthropic.Anthropic(
+            api_key=api_key,
+            base_url=base_url or "https://api.kimi.com/coding/",
+        )
+        # KIMI 的 Anthropic 兼容接口对 system 参数敏感，合并到 user prompt 中
+        full_prompt = (
+            "【系统指令】\n" + system_prompt + "\n\n" +
+            "【用户请求】\n" + user_prompt
+        )
+        response = client.messages.create(
+            model=model or "kimi-latest",
+            max_tokens=max_tokens,
+            messages=[{"role": "user", "content": full_prompt}],
+            timeout=timeout,
+        )
+        return response.content[0].text
 
     else:
         raise ValueError(f"不支持的 LLM provider: {provider}")
+
+
+def refine_text_with_llm(md_content, provider=None, api_key=None, base_url=None, model=None):
+    """
+    使用 LLM 对转录文本进行后处理，修正同音字、人名、专有名词等错误。
+    对于长文档自动分块处理，避免输出截断和超时。
+    """
+    if provider is None:
+        raise RuntimeError("未指定 LLM provider，请在 config.json 中设置 type 或 llm_provider。")
+
+    if not api_key:
+        raise RuntimeError(f"未找到 API Key。请在 config.json 中设置 api_key。")
+
+    print(f"  LLM Provider: {provider}")
+    if base_url:
+        print(f"  Base URL: {base_url}")
+    if model:
+        print(f"  Model: {model}")
+
+    # 估算：如果总内容较短（< 4000 字），一次性处理；否则分块
+    total_chars = len(md_content)
+    if total_chars < 4000:
+        chunks = [md_content]
+        print(f"  文档较短 ({total_chars} 字符)，单次处理。")
+    else:
+        chunks = split_md_into_chunks(md_content, max_chunk_size=6000)
+        print(f"  文档较长 ({total_chars} 字符)，分 {len(chunks)} 块处理。")
+
+    system_prompt = (
+        "你是一位专业的文字校对编辑，擅长语音识别文本的纠错。"
+        "你的任务是对转录文本进行审校，严格遵循以下规则：\n"
+        "1. 修正同音字错误（如：在/再、做/作、的/得/地、他/她/它等）；\n"
+        "2. 修正人名、地名、公司名、品牌名、专业术语、技术名词等专有名词；\n"
+        "3. 修正明显的语法和标点错误，但不要过度修改；\n"
+        "4. 保持原文的口语风格、语气和表达方式，不要润色或重写；\n"
+        "5. 绝对不要添加原文中没有的信息；\n"
+        "6. 保留所有 Markdown 格式和时间戳（如 `00:01:23`）。"
+    )
+
+    refined_chunks = []
+    for i, chunk in enumerate(chunks, 1):
+        user_prompt = (
+            "请对以下语音识别转录文本进行校对纠错。"
+            "直接返回修正后的完整 Markdown 文本，不要添加任何解释或总结。\n\n"
+            f"{chunk}"
+        )
+
+        print(f"  正在处理第 {i}/{len(chunks)} 块...")
+        try:
+            result = call_llm_single_chunk(
+                system_prompt, user_prompt, provider, api_key,
+                base_url=base_url, model=model, max_tokens=8192, timeout=300
+            )
+            refined_chunks.append(result)
+        except Exception as e:
+            print(f"  第 {i} 块处理失败: {e}")
+            print(f"  该块保留原始内容。")
+            refined_chunks.append(chunk)
+
+    return "\n\n".join(refined_chunks)
+
+
+def translate_text_with_llm(md_content, provider=None, api_key=None, base_url=None, model=None):
+    """
+    使用 LLM 将英文转录文本翻译成中文。
+    对于长文档自动分块处理，避免输出截断和超时。
+    """
+    if provider is None:
+        raise RuntimeError("未指定 LLM provider，请在 config.json 中设置 type 或 llm_provider。")
+
+    if not api_key:
+        raise RuntimeError(f"未找到 API Key。请在 config.json 中设置 api_key。")
+
+    print(f"  LLM Provider: {provider}")
+    if base_url:
+        print(f"  Base URL: {base_url}")
+    if model:
+        print(f"  Model: {model}")
+
+    total_chars = len(md_content)
+    if total_chars < 4000:
+        chunks = [md_content]
+        print(f"  文档较短 ({total_chars} 字符)，单次处理。")
+    else:
+        chunks = split_md_into_chunks(md_content, max_chunk_size=6000)
+        print(f"  文档较长 ({total_chars} 字符)，分 {len(chunks)} 块处理。")
+
+    system_prompt = (
+        "你是一位专业的中英翻译专家，擅长将英文语音识别转录文本翻译成地道、流畅的中文。"
+        "你的任务是将以下英文转录文本翻译成中文，严格遵循以下规则：\n"
+        "1. 保留所有 Markdown 格式和时间戳（如 `00:01:23`）；\n"
+        "2. 翻译要自然、口语化，符合中文表达习惯；\n"
+        "3. 对于专业术语、人名、地名、品牌名等，保留原文或在首次出现时标注原文；\n"
+        "4. 修正语音识别中的明显错误（如拼写错误、语法问题），使译文更准确；\n"
+        "5. 不要添加原文中没有的信息；\n"
+        "6. 保持段落的完整性，时间戳位置不变。"
+    )
+
+    translated_chunks = []
+    for i, chunk in enumerate(chunks, 1):
+        user_prompt = (
+            "请将以下英文语音识别转录文本翻译成中文。"
+            "直接返回翻译后的完整 Markdown 文本，不要添加任何解释或总结。\n\n"
+            f"{chunk}"
+        )
+
+        print(f"  正在翻译第 {i}/{len(chunks)} 块...")
+        try:
+            result = call_llm_single_chunk(
+                system_prompt, user_prompt, provider, api_key,
+                base_url=base_url, model=model, max_tokens=8192, timeout=300
+            )
+            translated_chunks.append(result)
+        except Exception as e:
+            print(f"  第 {i} 块翻译失败: {e}")
+            print(f"  该块保留原始内容。")
+            translated_chunks.append(chunk)
+
+    return "\n\n".join(translated_chunks)
 
 
 def transcribe_audio(audio_path, model_size="base", output_path=None):
@@ -336,9 +447,37 @@ def refine_md(md_path, output_path=None, llm_provider=None, api_key=None, base_u
     return output_path
 
 
+def translate_md(md_path, output_path=None, llm_provider=None, api_key=None, base_url=None, model=None):
+    """
+    只做 LLM 翻译，读取已有的 .md 文件翻译成中文。
+    """
+    if not os.path.exists(md_path):
+        raise FileNotFoundError(f"Markdown 文件不存在: {md_path}")
+
+    if output_path is None:
+        base, ext = os.path.splitext(md_path)
+        output_path = base + "_zh" + ext
+
+    print(f"[翻译步骤] 正在读取: {md_path}")
+    with open(md_path, "r", encoding="utf-8") as f:
+        md_content = f.read()
+
+    print(f"[翻译步骤] 正在使用 LLM 翻译成中文...")
+    translated_content = translate_text_with_llm(
+        md_content, provider=llm_provider, api_key=api_key, base_url=base_url, model=model
+    )
+    print("翻译完成")
+
+    with open(output_path, "w", encoding="utf-8") as f:
+        f.write(translated_content)
+
+    print(f"中文文稿已保存: {output_path}")
+    return output_path
+
+
 def main():
     parser = argparse.ArgumentParser(
-        description="语音转 Markdown 文稿 (支持分步执行: 识别 +> LLM 优化)"
+        description="语音转 Markdown 文稿 (支持分步执行: 识别 +> LLM 优化 +> 翻译)"
     )
     parser.add_argument("audio", help="音频文件路径 (或 .md 文件路径，配合 --only-refine)")
     parser.add_argument(
@@ -357,6 +496,10 @@ def main():
     parser.add_argument(
         "--only-refine", action="store_true",
         help="只做 LLM 优化，要求对应的 .md 文件已存在"
+    )
+    parser.add_argument(
+        "--translate-to-zh", action="store_true",
+        help="启用 LLM 翻译为中文。如果 .md 已存在则直接翻译，否则先转录再翻译"
     )
     parser.add_argument(
         "--config", default="config.json",
@@ -399,25 +542,58 @@ def main():
     audio_base, _ = os.path.splitext(args.audio)
     md_path = args.output if args.output else audio_base + ".md"
     refined_path = audio_base + "_refined.md"
+    zh_path = audio_base + "_zh.md"
 
-    # 只做 LLM 优化
+    # 检查是否需要 LLM 操作
+    needs_llm = args.refine or args.translate_to_zh or args.only_refine
+
+    # 只做 LLM 操作（不转录）
     if args.only_refine:
         if not os.path.exists(md_path):
             raise FileNotFoundError(
                 f"找不到 {md_path}，请先运行转录生成 .md 文件，"
                 f"或指定 --output 指向已有的 .md 文件。"
             )
-        refine_md(md_path, output_path=refined_path, llm_provider=llm_provider, api_key=api_key, base_url=base_url, model=model)
+        current_md = md_path
+        if args.refine:
+            current_md = refine_md(
+                current_md, output_path=refined_path,
+                llm_provider=llm_provider, api_key=api_key, base_url=base_url, model=model
+            )
+        if args.translate_to_zh:
+            translate_md(
+                current_md, output_path=zh_path,
+                llm_provider=llm_provider, api_key=api_key, base_url=base_url, model=model
+            )
+        elif not args.refine:
+            # 兼容原逻辑：只传 --only-refine 时只做校对
+            refine_md(
+                md_path, output_path=refined_path,
+                llm_provider=llm_provider, api_key=api_key, base_url=base_url, model=model
+            )
         return
 
-    # 转录 + 可选优化
-    if args.refine:
+    # 转录 + 可选优化/翻译
+    if needs_llm:
         if os.path.exists(md_path):
-            print(f"检测到已有文稿: {md_path}，跳过语音识别，直接进行 LLM 优化。")
-            refine_md(md_path, output_path=refined_path, llm_provider=llm_provider, api_key=api_key, base_url=base_url, model=model)
+            print(f"检测到已有文稿: {md_path}，跳过语音识别。")
+            current_md = md_path
         else:
             transcribe_audio(args.audio, model_size=args.model, output_path=md_path)
-            refine_md(md_path, output_path=refined_path, llm_provider=llm_provider, api_key=api_key, base_url=base_url, model=model)
+            current_md = md_path
+
+        if args.refine:
+            refine_md(
+                current_md, output_path=refined_path,
+                llm_provider=llm_provider, api_key=api_key, base_url=base_url, model=model
+            )
+            current_md = refined_path
+
+        if args.translate_to_zh:
+            translate_md(
+                current_md, output_path=zh_path,
+                llm_provider=llm_provider, api_key=api_key, base_url=base_url, model=model
+            )
     else:
         transcribe_audio(args.audio, model_size=args.model, output_path=md_path)
 
