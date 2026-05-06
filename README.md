@@ -267,7 +267,7 @@ python -c "from modelscope import snapshot_download; snapshot_download('iic/Cosy
 ### 使用流程
 
 ```bash
-# 1. 注册声音（准备 1-3 段 3-10 秒的清晰人声）
+# 1. 注册声音（准备 1-3 段 3-10 秒的清晰人声，仅支持 WAV 格式）
 python voice_clone.py --register my_voice --audio sample1.wav sample2.wav
 
 # 2. 使用克隆的声音合成语音
@@ -275,6 +275,35 @@ python voice_clone.py --text "你好，这是用我克隆的声音合成的。" 
 
 # 3. 也可以直接用预置音色（无需注册）
 python voice_clone.py --text "你好世界" --preset -o output.wav
+
+# 4. 查看已注册的声音
+python voice_clone.py --list-voices
+```
+
+**注册声音自动持久化**：注册信息自动保存到 `voices.json`，下次直接使用 `--voice` 即可，无需重新注册。
+
+### 给文稿配音（支持长文本）
+
+```bash
+# 从 Markdown 文件读取内容，自动过滤时间轴
+python voice_clone.py --text-file meeting.md --voice my_voice -o meeting.wav
+
+# 长文本自动分段合成（默认每段 300 字，可自定义）
+python voice_clone.py --text-file article.md --voice my_voice --max-chars 250 -o article.wav
+```
+
+`--text-file` 会自动过滤以下内容：
+- Markdown 标题、元信息、分隔线
+- 时间轴（如 `` `00:01:23` `` 或 `00:01:23`）
+
+长文本（超过 `--max-chars`）会自动分段合成，段间插入 0.3 秒静音，最终拼接为完整音频。
+
+### 音频格式要求
+
+CosyVoice 的参考音频**仅支持 WAV 格式**（16kHz、单声道最佳）。如果手边是 m4a/mp3，先用 FFmpeg 转换：
+
+```bash
+ffmpeg -i input.m4a -ar 16000 -ac 1 output.wav
 ```
 
 ### 预置音色
@@ -291,3 +320,12 @@ A: 可以在 `transcribe.py` 的 `initial_prompt` 中预先放入常见人名和
 
 **Q: 支持哪些音频格式？**
 A: 所有 FFmpeg 支持的格式（mp3、wav、m4a、flac、ogg、wma、aac 等）。
+
+**Q: 声音克隆报错 `Format not recognised`？**
+A: CosyVoice 的参考音频仅支持 WAV 格式。请先用 FFmpeg 转换：`ffmpeg -i input.m4a -ar 16000 -ac 1 output.wav`。
+
+**Q: 给长文章配音会截断吗？**
+A: 不会。`voice_clone.py` 会自动将长文本按语义切分，逐段合成后拼接为完整音频。通过 `--max-chars` 控制每段长度（默认 300 字）。
+
+**Q: 注册的声音下次还要重新注册吗？**
+A: 不需要。注册信息自动保存到 `voices.json`，下次直接用 `--voice` 即可。如果参考音频文件被删除，对应的声音会自动从列表中移除。
