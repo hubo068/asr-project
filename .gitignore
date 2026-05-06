@@ -1,0 +1,12 @@
+config.json
+*.wav
+*.mp3
+*.m4a
+*.md
+!README.md
+pretrained_models/
+__pycache__/
+*.pyc
+.env
+.venv
+venv/

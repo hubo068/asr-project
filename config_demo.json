@@ -1,0 +1,6 @@
+{
+  "type": "kimi",
+  "base_url": "https://api.kimi.com/coding/",
+  "api_key": "sk-你的API密钥",
+  "model": "Kimi Code"
+}
