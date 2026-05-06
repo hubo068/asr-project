@@ -4,6 +4,7 @@ config.json
 *.m4a
 *.md
 !README.md
+CosyVoice/
 pretrained_models/
 __pycache__/
 *.pyc

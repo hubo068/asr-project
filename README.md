@@ -28,6 +28,8 @@ pip install -r requirements.txt
 cp config_demo.json config.json
 ```
 
+**单 Provider 格式（旧格式，仍兼容）：**
+
 ```json
 {
   "type": "kimi",
@@ -37,9 +39,28 @@ cp config_demo.json config.json
 }
 ```
 
-支持的 `type`：`kimi`、`anthropic`、`openai`
+**多 Provider 格式（推荐，支持命令行切换）：**
 
-`base_url` 为可选字段，根据不同平台填写对应地址。
+```json
+{
+  "providers": {
+    "kimi": {
+      "type": "kimi",
+      "base_url": "https://api.kimi.com/coding/",
+      "api_key": "sk-你的KIMI密钥",
+      "model": "Kimi Code"
+    },
+    "openai": {
+      "type": "openai",
+      "api_key": "sk-你的OpenAI密钥",
+      "model": "gpt-4o"
+    }
+  },
+  "default": "kimi"
+}
+```
+
+支持的 `type`：`kimi`、`anthropic`、`openai`
 
 ## 使用方法
 
@@ -65,6 +86,16 @@ python transcribe.py your_audio.m4a --only-refine
 
 优化后的文件保存为：`your_audio_refined.md`
 
+### 切换 LLM Provider（多 Provider 配置时）
+
+```bash
+# 使用默认 provider（config.json 中 default 指定的）
+python transcribe.py meeting.m4a --only-refine
+
+# 手动指定 provider
+python transcribe.py meeting.m4a --only-refine --llm-provider openai
+```
+
 ### 一步完成（识别 + 优化）
 
 如果 `.md` 不存在，`--refine` 会先识别再优化：
@@ -78,23 +109,23 @@ python transcribe.py your_audio.m4a --refine
 ```bash
 # 1. 识别
 python transcribe.py meeting.m4a
-# → 生成 meeting.md
+# -> 生成 meeting.md
 
 # 2. 检查 meeting.md，发现有几处同音字/人名错误
 
 # 3. 直接优化（秒级完成，不重新识别）
 python transcribe.py meeting.m4a --only-refine
-# → 生成 meeting_refined.md
+# -> 生成 meeting_refined.md
 ```
 
 ## 分步工作流示意
 
 ```
 音频文件
-    ↓
-[步骤 1] Whisper 识别  →  your_audio.md
-    ↓  （人工检查，或发现错误）
-[步骤 2] LLM 优化      →  your_audio_refined.md
+    |
+[步骤 1] Whisper 识别  ->  your_audio.md
+    |  （人工检查，或发现错误）
+[步骤 2] LLM 优化      ->  your_audio_refined.md
 ```
 
 ## 模型说明

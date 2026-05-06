@@ -363,14 +363,37 @@ def main():
         help="配置文件路径 (默认: config.json)"
     )
 
+    parser.add_argument(
+        "--llm-provider",
+        help="指定使用 config.json 中配置的哪个 provider（默认使用 default 指定的）"
+    )
+
     args = parser.parse_args()
 
-    # 读取配置（兼容 type 和 llm_provider 两种字段名）
+    # 读取配置，支持多 provider 格式和旧格式
     config = load_config(args.config)
-    llm_provider = config.get("type") or config.get("llm_provider")
-    api_key = config.get("api_key")
-    base_url = config.get("base_url")
-    model = config.get("model")
+
+    # 多 provider 格式: { "providers": { "kimi": {...}, "openai": {...} }, "default": "kimi" }
+    if "providers" in config:
+        provider_name = args.llm_provider or config.get("default", "kimi")
+        provider_config = config["providers"].get(provider_name)
+        if not provider_config:
+            available = list(config["providers"].keys())
+            raise RuntimeError(
+                f"配置文件中未找到 provider '{provider_name}'。"
+                f"可用的 provider: {available}"
+            )
+        llm_provider = provider_config.get("type") or provider_config.get("llm_provider")
+        api_key = provider_config.get("api_key")
+        base_url = provider_config.get("base_url")
+        model = provider_config.get("model")
+        print(f"使用配置: {provider_name} ({llm_provider})")
+    else:
+        # 旧格式兼容: { "type": "kimi", "api_key": "...", ... }
+        llm_provider = config.get("type") or config.get("llm_provider")
+        api_key = config.get("api_key")
+        base_url = config.get("base_url")
+        model = config.get("model")
 
     # 计算默认路径
     audio_base, _ = os.path.splitext(args.audio)
