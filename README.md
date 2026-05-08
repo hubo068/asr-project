@@ -240,13 +240,16 @@ python transcribe.py podcast.mp3 --translate-to-zh
 
 ## 声音克隆（实验功能）
 
-基于 **CosyVoice** 实现中文声音克隆：只需 1-3 段参考音频，即可克隆声音给任意文字配音。
+基于 **CosyVoice** 实现中文声音克隆。推荐使用带真实参考文本的 zero-shot 克隆：参考音频越干净、参考文本越准确，声音相似度通常越好。
 
 ### 安装 CosyVoice
 
 声音克隆需要额外安装 CosyVoice 及其预训练模型（约 3GB）：
 
 ```bash
+# 建议先进入项目使用的虚拟环境
+conda activate asr
+
 # 1. 安装 CosyVoice
 git clone https://github.com/FunAudioLLM/CosyVoice.git
 cd CosyVoice
@@ -262,21 +265,33 @@ python -c "from modelscope import snapshot_download; snapshot_download('iic/Cosy
 # git clone https://huggingface.co/FunAudioLLM/CosyVoice-300M pretrained_models/CosyVoice-300M
 ```
 
-**硬件要求**：建议 NVIDIA GPU（显存 4GB+），CPU 也可运行但速度较慢。
+**GPU 加速**：建议 NVIDIA GPU（显存 4GB+）。RTX 50 系列等新显卡需要支持对应架构的 PyTorch CUDA 包，例如 CUDA 12.8+：
+
+```bash
+python -m pip uninstall -y torch torchaudio torchvision
+python -m pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu128
+
+# 检查当前环境、PyTorch、CUDA、显卡架构是否匹配
+python voice_clone.py --cuda-diagnostics
+```
+
+如果日志提示 `onnxruntime CUDAExecutionProvider is not installed`，说明 PyTorch TTS 主体会走 GPU，但部分 ONNX 前端仍在 CPU 上运行；需要更完整加速时再安装 `onnxruntime-gpu`。
 
 ### 使用流程
 
+准备参考音频时，优先选 6-10 秒、单人、无背景音乐、无混响、语气稳定的 WAV。`--prompt-text` / `--prompt-texts-file` 必须和参考音频里真实说出的内容尽量逐字一致。
+
 ```bash
-# 1. 注册声音（准备 1-3 段 3-10 秒的清晰人声，仅支持 WAV 格式）
-python voice_clone.py --register my_voice --audio sample1.wav sample2.wav
+# 1. 单段参考音频注册
+python voice_clone.py --register my_voice --audio sample1.wav --prompt-text "这里填写 sample1.wav 里真实说出的文字"
 
-# 2. 使用克隆的声音合成语音
-python voice_clone.py --text "你好，这是用我克隆的声音合成的。" --voice my_voice -o output.wav
+# 2. 多段参考音频注册：prompt_texts.txt 每行对应一个 --audio
+python voice_clone.py --register my_voice --audio sample1.wav sample2.wav sample3.wav --prompt-texts-file prompt_texts.txt
 
-# 3. 也可以直接用预置音色（无需注册）
-python voice_clone.py --text "你好世界" --preset -o output.wav
+# 3. 为每段参考音频生成候选试听，选最像的一段
+python voice_clone.py --text "你好，这是一次声音克隆测试。" --voice my_voice --device cuda --no-fp16 --no-load-jit --prompt-candidates -o candidate.wav
 
-# 4. 查看已注册的声音
+# 4. 查看已注册声音和每段参考音频的编号
 python voice_clone.py --list-voices
 ```
 
@@ -285,11 +300,14 @@ python voice_clone.py --list-voices
 ### 给文稿配音（支持长文本）
 
 ```bash
-# 从 Markdown 文件读取内容，自动过滤时间轴
-python voice_clone.py --text-file meeting.md --voice my_voice -o meeting.wav
+# 使用第 0 段参考音频给 Markdown 文稿配音
+python voice_clone.py --text-file meeting.md --voice my_voice --prompt-index 0 --device cuda --no-fp16 --no-load-jit -o meeting.wav
 
-# 长文本自动分段合成（默认每段 300 字，可自定义）
-python voice_clone.py --text-file article.md --voice my_voice --max-chars 250 -o article.wav
+# 给本项目中的 llm01_zh.md 配音
+python voice_clone.py --text-file "D:\work\07ai-app\asr_project\llm01_zh.md" --voice my_voice --prompt-index 0 --device cuda --no-fp16 --no-load-jit --max-chars 120 -o llm01.wav
+
+# 长文本自动分段合成；相似度不稳时可把分段调短一些
+python voice_clone.py --text-file article.md --voice my_voice --prompt-index 0 --device cuda --no-fp16 --no-load-jit --max-chars 100 -o article.wav
 ```
 
 `--text-file` 会自动过滤以下内容：
@@ -297,6 +315,15 @@ python voice_clone.py --text-file article.md --voice my_voice --max-chars 250 -o
 - 时间轴（如 `` `00:01:23` `` 或 `00:01:23`）
 
 长文本（超过 `--max-chars`）会自动分段合成，段间插入 0.3 秒静音，最终拼接为完整音频。
+
+### 提升克隆相似度
+
+- 给每段参考音频都提供准确参考文本，优先使用 `--prompt-texts-file`。
+- 使用 `--prompt-candidates` 试听不同参考音频，选最像的一段后用 `--prompt-index` 固定它。
+- 参考音频不要太长，6-10 秒通常比几十秒杂音频更稳定。
+- 参考音频的语速、情绪、语言尽量接近目标文稿。
+- 生成爆音、静音、滴答声时，优先使用 `--no-fp16 --no-load-jit` 重新生成。
+- 长文配音建议 `--max-chars 80-150`，每段过长时音色和韵律更容易漂移。
 
 ### 音频格式要求
 

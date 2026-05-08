@@ -6,6 +6,9 @@ config.json
 !README.md
 CosyVoice/
 pretrained_models/
+wheelhouse/
+.tmp-pip-asr/
+*.whl
 __pycache__/
 *.pyc
 .env

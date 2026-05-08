@@ -3,3 +3,4 @@ anthropic
 openai
 torch
 torchaudio
+soundfile
